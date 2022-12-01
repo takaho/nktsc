@@ -219,38 +219,47 @@ def show_marker(arguments=None):
         'total.html':fn_total   
     }
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-e', help='expression tsv or sparse matrix')
-    parser.add_argument('--verbose', action='store_true')
-    parser.add_argument('-g', nargs='+')
-    parser.add_argument('-c', help='cluster')
-    parser.add_argument('-u', help='coordinates such as UMAP or tSNE')
-    parser.add_argument('-d', type=int, default=2, choices=[2, 3], help='2D or 3D chart')
-    parser.add_argument('-o', default='exprchart')
-    # parser.add_argument('--threshold', default=1, type=float, help='expression threshold, 0.9 as 90% in percentile mode')
-    parser.add_argument('--percentile', default=1, type=float, help='expression threshold, 0.9 as 90% in percentile mode')
-    parser.add_argument('--output-all', action='store_true')
-    parser.add_argument('--open', action='store_true')
-    args = parser.parse_known_args(arguments)[0]
+    if arguments is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-e', help='expression tsv or sparse matrix')
+        parser.add_argument('--verbose', action='store_true')
+        parser.add_argument('-g', nargs='+')
+        parser.add_argument('-c', help='cluster')
+        parser.add_argument('-u', help='coordinates such as UMAP or tSNE')
+        parser.add_argument('-d', type=int, default=2, choices=[2, 3], help='2D or 3D chart')
+        parser.add_argument('-o', default='exprchart')
+        parser.add_argument('--seurat-dir', default='seurat', metavar='directory')
+        # parser.add_argument('--threshold', default=1, type=float, help='expression threshold, 0.9 as 90% in percentile mode')
+        parser.add_argument('--percentile', default=0.8, type=float, help='expression threshold, 0.9 as 90% in percentile mode')
+        # parser.add_argument('--output-all', action='store_true')
+        parser.add_argument('--open', action='store_true')
+        args, cmds = parser.parse_known_args(arguments)
+    else:
+        args = arguments
 
     logger = tkutil.instanciate_standard_logger(sys._getframe().f_code.co_name)
     verbose = args.verbose
     auto_open = args.open
+    seurat_dir = args.seurat_dir
     if verbose:
         logger.setLevel(logging.DEBUG)
 
     chart_type = args.d
-    fn_input = list(sorted(args.u))[0]#, key=lambda f:os.))[0]
+    # fn_input = list(sorted(args.u))[0]#, key=lambda f:os.))[0]
 
     outdir = args.o
     mode2d = (args.d == 2)
-    percentile_mode = args.percentile
-    fn_expression = args.e
-    fn_coord = args.u
-    output_all = args.output_all
+    percentile = args.percentile
+    # percentile_mode = args.percentile
+    fn_expression = args.e or os.path.join(seurat_dir, 'seurat.normalized.tsv')
+    fn_coord = args.u or os.path.join(seurat_dir, 'seurat.umap.tsv')
+    fn_cluster = args.c or os.path.join(seurat_dir, 'seurat.clusters.tsv')
+    # output_all = args.output_all
     threshold = args.percentile
+    genes = args.g
 
-    percentile_mode = threshold < 1
+    # percentile_mode = threshold < 1
+
 
     os.makedirs(outdir, exist_ok=True)
 
@@ -263,29 +272,36 @@ def show_marker(arguments=None):
     logger.info('loading coordinates from {}'.format(fn_coord))
     coord = pd.read_csv(fn_coord, sep='\t', index_col=0)
 
-    if args.c:
-        clusterdf = pd.read_csv(args.c, sep='\t', index_col=0)
-        if 'Cluster' in clusterdf.columns:
-            clusters = clusterdf['Cluster'].values
-        else:
-            clusters = clusterdf.values[:,0]
-        logger.info('Cluster data loaded from {}'.format(args.c))
-        del clusterdf
-        n_clusters = max(clusters) + 1
-    else:
-        clusters = None
-        n_clusters = 0
-        clusters = []
-        cluster_separator = '_'
-        cluster_groups = {}
-        for index in coord.index:
-            group = index.split(cluster_separator)[0]
-            if group not in cluster_groups:
-                cluster_groups[group] = len(cluster_groups) 
-            clusters.append(cluster_groups[group])
+    # logger.info('loading coordinates')
+    # coord = pd.read_csv(fn_coord, sep='\t', index_col=0)
+
+    clusterdf = pd.read_csv(fn_cluster, sep='\t', index_col=0)
+    n_clusters = np.max(clusterdf) + 1
+    n_cells = clusterdf.shape[0]
+    logger.info(f'{n_clusters} clusters loaded')
+    # if args.c:
+    #     clusterdf = pd.read_csv(args.c, sep='\t', index_col=0)
+    #     if 'Cluster' in clusterdf.columns:
+    #         clusters = clusterdf['Cluster'].values
+    #     else:
+    #         clusters = clusterdf.values[:,0]
+    #     logger.info('Cluster data loaded from {}'.format(args.c))
+    #     del clusterdf
+    #     n_clusters = max(clusters) + 1
+    # else:
+    #     clusters = None
+    #     n_clusters = 0
+    #     clusters = []
+    #     cluster_separator = '_'
+    #     cluster_groups = {}
+    #     for index in coord.index:
+    #         group = index.split(cluster_separator)[0]
+    #         if group not in cluster_groups:
+    #             cluster_groups[group] = len(cluster_groups) 
+    #         clusters.append(cluster_groups[group])
             
     markers = []
-    for gene in args.g:
+    for gene in genes:
         if os.path.exists(gene):
             with open(gene) as fi:
                 for line in fi:
@@ -294,16 +310,44 @@ def show_marker(arguments=None):
                         markers.append(items[0])
         else:
             markers.append(gene)
-    if verbose: sys.stderr.write('loading gene expression from {}\n'.format(fn_expression))
+    logger.info('loading {} gene expression from {}\n'.format(len(markers), fn_expression))
     expr = load_gene_expression(fn_expression, markers, verbose=verbose, logger=logger)
+    if expr.shape[1] != n_cells:
+        raise Exception('loaded expression was not compatible clusters having different cells')
     marker_genes = sorted([g for g in markers if g in expr.index])
+    logger.info('{} viable genes loaded'.format(len(marker_genes)))
 
     if verbose:
-        for gene in sorted(markers):
+        logger.info('Expression percentile [0,50,90,95,99,100]')
+        for gene in sorted(marker_genes):
             if gene not in expr.index: continue
             values = expr.loc[gene].values
-            pt = np.percentile(values, [0, 50, 90, 95, 99, 99.9, 100])
-            sys.stderr.write('{}\t{:.3f}\t{:.3f}\t{:.3f}\n'.format(gene, pt[0], pt[1], pt[2]))
+            pt = np.percentile(values, [0, 50, 90, 95, 99, 100])
+            logger.info('{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(gene, pt[0], pt[1], pt[2], pt[3], pt[4], pt[5]))
+    marker_size = max(2, 8 - np.log10(n_cells))
+    traces = []
+    # put all cells
+    traces.append(go.Scatter(x=coord.values[:,0], y=coord.values[:,1], name=f'All_{n_cells}', mode='markers',
+        marker=dict(size=2, color='lightgray')))
+    for gene in marker_genes:
+        values = expr.loc[gene].values.reshape(-1)
+        thr = np.percentile(values, percentile * 100)
+        idx = [i for i in range(n_cells) if values[i] > thr]
+        # print(gene, percentile, thr)
+        if len(idx) > 0:
+            xy = coord.iloc[idx,:].values
+            logger.info('{}\t{} cells\t{}'.format(gene, thr, str(np.mean(xy, axis=0))))
+            traces.append(go.Scatter(x=xy[:,0], y=xy[:,1], name=gene, mode='markers',
+                marker=dict(size=marker_size)))
+    fig = go.Figure(traces)
+    fig.update_layout(plot_bgcolor='white')
+    fig.update_xaxes(linewidth=1, linecolor='black', showgrid=False, showline=True, mirror='ticks', title=coord.columns[0])
+    fig.update_yaxes(linewidth=1, linecolor='black', showgrid=False, showline=True, mirror='ticks', title=coord.columns[1])
+
+    plotly.offline.plot(fig, filename=fn_scatter, auto_open=auto_open)
+    if 1:
+        return
+    
 
     cluster2index = {}
     with open(fn_info, 'w') as fo:
@@ -322,12 +366,20 @@ def show_marker(arguments=None):
                 fo.write('marker{}:{}\t{}\n'.format(i + 1, marker, marker in expr.index))
 
     n_charts = min(expr.shape[0], 15)
-    # n_cols = min(3, n_charts)# // 3
     n_rows = min(4, n_charts)# // 4
     n_cols = (n_charts + n_rows - 1) // n_rows
     symbols = ['circle', 'diamond', 'square', 'triangle-up', 'circle-open-dot', 
     'diamond-open-dot', 'square-open-dot', 'cross', 'triangle-left', 'triangle-left-open']
     symbols = ['circle', ]
+
+    cvals = clusterdf.values[:,0].values.reshape(-1)
+    for c in range(-1, n_clusters):
+        if c < 0:
+            idx = [i for i in range(n_cells) if cvals[i] < 0]
+        else:
+            idx = [i for i in range(n_cells) if cvals[i] == c]
+        xy = coord[idx,:]
+
 
     if clusters is not None: #
         import plotly.express as px
@@ -467,231 +519,107 @@ def show_marker(arguments=None):
     }
 
 def display_cluster_map(arguments=None):
-    """Cluster coodinates
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-e', help='expression tsv')
-    parser.add_argument('--verbose', action='store_true')
-    parser.add_argument('-g', nargs='+')
-    parser.add_argument('-c', help='cluster')
-    parser.add_argument('--color', metavar='tsv file', help='Color map of each cluster')
-    parser.add_argument('-u', nargs='+', help='coordinates such as UMAP or tSNE')
-    parser.add_argument('-d', type=int, default=2, choices=[2, 3], help='2D or 3D chart')
-    parser.add_argument('-o', default='exprchart')
-    parser.add_argument('-t', default=1, type=float, help='expression threshold')
-    parser.add_argument('--percentile', action='store_true')
-    parser.add_argument('--colormode', type=int, default=-1, help='color mode')
-    parser.add_argument('--preset-color', action='store_true')
-    parser.add_argument('--min-cluster-size', default=10, type=int)
-    args = parser.parse_known_args(arguments)[0]
+    """Show calculated scatter plot in HTML.
+Arguments:
+    --seurat-dir seurat.R output directory
+    -c cluster file in tsv (default seurat_dir/seurat.clusters.tsv)
+    -u coordinate file in tsv (default seurat_dir/seurat.umap.tsv)
 
+    """
+    if arguments is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-e', help='expression tsv')
+        parser.add_argument('--verbose', action='store_true')
+        parser.add_argument('-g', nargs='+')
+        parser.add_argument('-c', help='cluster')
+        parser.add_argument('--color', metavar='tsv file', help='Color map of each cluster')
+        parser.add_argument('-u', nargs='+', help='coordinates such as UMAP or tSNE')
+        parser.add_argument('-d', type=int, default=2, choices=[2, 3], help='2D or 3D chart')
+        parser.add_argument('-o', default='exprchart')
+        parser.add_argument('-t', default=1, type=float, help='expression threshold')
+        parser.add_argument('--percentile', action='store_true')
+        # parser.add_argument('--colormode', type=int, default=-1, help='color mode')
+        parser.add_argument('--preset-color', action='store_true')
+        parser.add_argument('--min-cluster-size', default=10, type=int)
+        parser.add_argument('--open', action='store_true')
+        args, cmds = parser.parse_known_args(arguments)
+    else:
+        args = arguments
+    
     verbose = args.verbose
     chart_type = args.d
-    fn_input = list(sorted(args.u))[0]
+    # fn_input = list(sorted(args.u))[0]
     outdir = args.o
-    mode2d = (args.d == 2)
-    percentile_mode = args.percentile
-    fn_expression = args.e
+    seurat_dir = args.seurat_dir
+    # mode2d = (args.d == 2)
+    # percentile_mode = args.percentile
+    auto_open = args.open
+    fn_out = os.path.join(outdir, 'chart.clusters.html')
 
     os.makedirs(outdir, exist_ok=True)
-    lower_limit = args.min_cluster_size
+    # lower_limit = args.min_cluster_size
+
+    fn_cluster = args.c or os.path.join(seurat_dir, 'seurat.clusters.tsv')
+    fn_coord = args.c or os.path.join(seurat_dir, 'seurat.umap.tsv')
+    fn_expression = args.e or os.path.join(seurat_dir, 'seurat.count.tsv')
+    logger = tkutil.get_logger(sys._getframe().f_code.co_name)
+    if args.verbose: logger.setLevel(10)
+    # fn_log = os.path.join(outdir, 'chart.cluster')
 
     fn_info = os.path.join(outdir, 'run.info')
     fn_scatter = os.path.join(outdir, 'scatter.html')
     fn_violin = os.path.join(outdir, 'violin.html')
     fn_total = os.path.join(outdir, 'clusters.html')
 
-    marker_group = [
-        ['Pou5f1', 'Nanog', 'Sox2', 'Zfp42', ], # ES red
-        ['Apoe','Apoa1','Igf2','Ttr','Amn','Cldn6','Dab2','Cyp26a1','Krt8','Krt18','Krt19 Foxa2','Vegfa','Hnf1b','Acvr1','Gata4','Gata6','Afp','Hnf4a','Cited1','Rhox5','Ihh','Furin','Sox17','Sox7','Bmp2','Foxh1','Fgf5','Fgf8','Otx2','Nodal','Thbd','Stra6','Pdgfra','Fst','Sparc','Plat','Pth1r','Cubn'], # PrES green
-        ['Cdx2','Eomes','Sox2','Esrrb','Elf5','Prl3d1','Csh1','Ascl2','Tpbpa','Esx1','Dlx3'] # TS blue
-    ]
+    info = {
+        'scatter':fn_scatter,
+        'violin':fn_violin,
+        'total':fn_total,
+    }
 
-    coord = pd.read_csv(fn_input, sep='\t', index_col=0)
+    clu = pd.read_csv(fn_cluster, sep='\t', index_col=0)
+    coord = pd.read_csv(fn_coord, sep='\t', index_col=0)
+    if clu.shape[0] != coord.shape[0]:
+        raise Exception('incompatible data size, number of cells of cluster labels and that of coordinates should match')
+    n_cells = clu.shape[0]
     cluster2color = None
+    n_clusters = np.max(clu.values) + 1
+    min_clus = np.min(clu.values)
 
-    if args.color is not None:
-        cluster2color = {}
-        with open(args.color) as fi:
-            for line in fi:
-                items = line.strip().split('\t')
-                if len(items) > 1 and re.match('\\-?\\d+$', items[0]):
-                    cluster2color[int(items[0])] = items[1]
-        colormode = -1
-    else:
-        colormode = args.colormode        
+    logger.info('Cluster {}-{}'.format(min_clus, n_clusters))
 
-    # lower_limit = 100
-    alt_labels = None
-    # presets = ['all', 'pres']
-
-    if args.c is not None and os.path.exists(args.c):
-        if os.path.exists(args.c):
-            clusterdf = pd.read_csv(args.c, sep='\t', index_col=0)
-        else:
-            clusterdf = None
-
-        # print(clusterdf)
-        if 'Cluster' in clusterdf.columns:
-            clusters = clusterdf['Cluster'].values
-        else:
-            clusters = clusterdf.values[:,0]
-        # print(clusters)
-        cluster2color = {}
-        if verbose:
-            sys.stderr.write('Cluster data loaded from {}\n'.format(args.c))
-        del clusterdf
-    else:
-        clusters = None
-    use_preset_color = args.preset_color
-    alt_labels = None
-
-    raise Exception('this function is specific for a certain study')
-    # if use_preset_color:
-    #     # if clusters is None:
-    #     if clusters is None:
-    #         # clusters = None
-    #         clusters = []
-    #         n_clusters = 0
-    #         cluster_separator = '.'
-    #         cluster_groups = {}
-    #         # cluster2color = {}
-    #         for index in coord.index:
-    #             group = index.split(cluster_separator)[0]
-    #             if group not in cluster_groups:
-    #                 cluster_groups[group] = len(cluster_groups) 
-    #             clusters.append(cluster_groups[group])
-    #             # cluster2color[cluster_groups[group]] = None
-    #         cc = [None] * 27
-    #         tmp_celltype = \
-    #             """p0, t0, p0, e0, t0,   e0, p0, p0, t0, t3, 
-    #             t3, t3, p3, e3, e3,   p3, p3, t3, t6, p6, 
-    #             t6, e6, t6, p6, p6,   t6, p6, p6, p6""".split(',')
-    #     else:
-    #         tmp_celltype = ['p6', 'p0', 'p3', 'p6', 'p0', 'p6', 'p3', 'p6']
-    #         n_clusters = len(tmp_celltype)
-    #         # for i in range(n_clusters):
-    #         #     clusters.append(i)
-    #         cc = [None] * n_clusters
-    #         print(clusters)
-    #     alt_labels = []
-    #     # color2cluster = []
+    # if args.color is not None:
     #     cluster2color = {}
-    #     used = set()
-    #     for cn, tc in enumerate(tmp_celltype):
-    #         tc = tc.strip()
-    #         if tc.startswith('p'):
-    #             red = green = 16
-    #             blue = 128
-    #             celltype = 'PrES'
-    #         elif tc.startswith('e'):
-    #             red = 128
-    #             blue = green = 16
-    #             celltype = 'ES'
-    #         else:
-    #             green = 100
-    #             red = blue = 32
-    #             celltype = 'TS'
-    #         alt_labels.append('{} day{}'.format(celltype, tc[-1]))
-    #         if tc.endswith('3'):
-    #             red *= 2
-    #             blue *= 2
-    #             green *= 2
-    #         elif tc.endswith('6'):
-    #             red += 127
-    #             blue += 127
-    #             green += 127
-    #         if tc in used:
-    #             red += (np.random.randint(0, 64) - 32)
-    #             green += (np.random.randint(0, 64) - 32)
-    #             blue += (np.random.randint(0, 64) - 32)
-    #         else:
-    #             used.add(tc)
-    #         # print(tc, red, green, blue)
-
-    #         red = max(0, min(255, red))
-    #         green = max(0, min(255, green))
-    #         blue = max(0, min(255, blue))
-
-    #         cluster2color[cn] = 'rgb({},{},{})'.format(red, green, blue)
-
-    # n_clusters = max(clusters) + 1
-    # cluster2index = {}
-    # n_clusters = 0
-    # def __cluster_order(cn):
-    #     if alt_labels is not None:
-    #         return alt_labels[cn]
-    #     else:
-    #         return cn
-    # for cn in sorted(clusters, key=__cluster_order):
-    #     index = [j for j in range(len(clusters)) if clusters[j] == cn]
-    #     n_cells_cluster = len(index)#np.count_nonzero(clusters[clusters==i])
-    #     if n_cells_cluster > 0:
-    #         cluster2index[cn] = index
-    #         if cn >= 0:
-    #             n_clusters += 1
-    # traces = []
-    # i_ = 0
-
-    # symbols = ['circle', 'diamond', 'rectangle', 'triangle-up', 'circle-open', 
-    # 'diamond-open', 'rectangle-open', 'cross']
-    # symbols = ['circle', ]
-
-    # cogtable = []
-    # for cn, index in cluster2index.items():
-    #     xyz = coord.values[index,0:2]
-    #     cogtable.append(np.mean(xyz, axis=0))
-    # cmin = np.min(np.array(cogtable), axis=0)
-    # cmax = np.max(np.array(cogtable), axis=0)
-    # if mode2d:
-    #     cmin = cmin[0:2]
-    #     cmax = cmax[0:2]
+    #     with open(args.color) as fi:
+    #         for line in fi:
+    #             items = line.strip().split('\t')
+    #             if len(items) > 1 and re.match('\\-?\\d+$', items[0]):
+    #                 cluster2color[int(items[0])] = items[1]
+    #     colormode = -1
     # else:
-    #     cmin = cmin[0:3]
-    #     cmax = cmax[0:3]
+    #     colormode = args.colormode        
 
-    # for cn, index in cluster2index.items():
-    #     if cn < 0: continue
-    #     if lower_limit > 0 and len(index) < lower_limit: continue
-    #     if mode2d:
-    #         xyz = coord.values[index,0:2]
-    #     else:
-    #         xyz = coord.values[index,0:3]
-    #     name = 'C{} ({})'.format(cn + 1, len(index))
-    #     if alt_labels is not None:
-    #         name = alt_labels[cn]
-    #     texts = coord.index[index]
-    #     marker = dict(size=2, symbol=symbols[i_ % len(symbols)])
-    #     if cn in cluster2color:
-    #         #print(cn, cluster2color[cn])
-    #         marker['color'] = cluster2color[cn]
-    #     else:
-    #         rgb = calculate_coordinate_color(np.mean(xyz, axis=0), 
-    #             cmin, cmax, colormode=colormode)
-    #         if rgb is not None:
-    #             marker['color'] = rgb
-    #     if mode2d:
-    #         trace = go.Scattergl(x=xyz[:,0], y=xyz[:,1], name=name, text=texts,
-    #         mode='markers', marker=marker)
-    #     else:
-    #         trace = go.Scatter3d(x=xyz[:,0], y=xyz[:,1], z=xyz[:,2], name=name,
-    #             text=texts, mode='markers', marker=marker)
-    #     traces.append(trace)
-    # if colormode < 0:    
-    #     layout = go.Layout(xaxis=dict(title=coord.columns[0]), 
-    #         yaxis=dict(title=coord.columns[1]),
-    #         plot_bgcolor='white')
-    # else:
-    #     layout = go.Layout(xaxis=dict(title=coord.columns[0]), 
-    #         yaxis=dict(title=coord.columns[1]),
-    #         plot_bgcolor='white')
-    # fig = go.Figure(traces, layout)
-    # fig.update_xaxes(linewidth=1, showline=True, mirror='ticks', linecolor='black', 
-    #     title=coord.columns[0], showgrid=False)
-    # fig.update_yaxes(linewidth=1, showline=True, mirror='ticks', linecolor='black',
-    #     title=coord.columns[1], showgrid=False)
-    # plotly.offline.plot(fig, filename=fn_scatter)
-        
+    traces = []
+    clu_vals = clu.iloc[:,0].values.reshape(-1)
+    marker_size = max(1, 10 - (np.log10(n_cells)))
+    for cn in range(min_clus, n_clusters):
+        idx = [i for i in range(n_cells) if cn == clu_vals[i]]
+        if cn < 0:
+            cluster_name = 'U{}'.format(-cn)
+        else:
+            cluster_name = 'C{}_{}'.format(cn + 1, len(idx))
+        logger.info(cluster_name)
+        xy = coord.values[idx,:]
+        x = xy[:,0]
+        y = xy[:,1]
+        traces.append(go.Scatter(x=x, y=y, name=cluster_name, mode='markers', marker=dict(size=marker_size)))
+    layout = go.Layout(plot_bgcolor='white')
+    fig = go.Figure(traces, layout)        
+    fig.update_xaxes(linewidth=1, linecolor='black', showgrid=False, showline=True, mirror='ticks', title=coord.columns[0])    
+    fig.update_yaxes(linewidth=1, linecolor='black', showgrid=False, showline=True, mirror='ticks', title=coord.columns[1])    
+
+    plotly.offline.plot(fig, filename=fn_scatter, auto_open=auto_open)
+
 
 def display_count_map(arguments=None):
     """Draw count distribution charts by cluster
@@ -1366,7 +1294,7 @@ def main():
     parser.add_argument('-o', default='analysis', metavar='directory', help='output')
 
     parser.add_argument('-t', metavar='number', default=1, type=float, help='expression threshold')
-    parser.add_argument('--percentile', action='store_true', help='percentile mode')
+    parser.add_argument('--percentile', type=float, default=1.0)
 
     parser.add_argument('-c', metavar='filename', help='cluster TSV file')
     parser.add_argument('-i', metavar='directory', help='matrix directory')
@@ -1404,21 +1332,15 @@ def main():
             if args.e is None:
                 cargs += ['-e', results['count.tsv']]
             if args.g is not None:
-                show_marker(cargs)
+                show_marker(args)
             cargs += ['--color', results['color.tsv']]
-            display_cluster_map(cargs)
+            display_cluster_map(args)
         elif cmd == 'marker':
-            show_marker(cargs)
+            show_marker(args)
         elif cmd == 'count':
             info = display_count_map(cargs)
-
-            # info = count_tags_by_cluster(cargs)
-            # fn_coord = args.u
-            # if fn_coord is not None:
-            #     cargs += ['--color', info['color.tsv']]
-            #     display_cluster_map(cargs)
         elif cmd == 'cluster':
-            display_cluster_map(cargs)
+            display_cluster_map(args)
         elif cmd == 'byname':
             display_cell_distribution(cargs)
         elif cmd == 'heatmap':

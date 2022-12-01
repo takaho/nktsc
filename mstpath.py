@@ -1,3 +1,6 @@
+"""Trajectory analysis script. 
+python mstpath.py 
+"""
 import os, sys, re, argparse
 import tkmst
 import pandas as pd
@@ -10,21 +13,7 @@ import plotly.graph_objs as go
 import plotly
 import plotly.io
 import mygo
-
-def __get_logger(logger=None, logfile=None):
-    if logger is None:
-        logger = logging.getLogger(sys._getframe().f_code.co_name)
-    # set logging
-    def _set_log_handler(logger, handler):#, verbose):
-        handler.setFormatter(logging.Formatter('%(asctime)s %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s'))
-        logger.addHandler(handler)
-        return logger
-    _set_log_handler(logger, logging.StreamHandler())
-    if logfile is not None:
-        _set_log_handler(logger, logging.FileHandler(logfile))
-    # logger.setLevel(logging.ERROR)
-    logger.propagate = False
-    return logger
+from tkutil import get_logger
 
 class MSTNode(object):
     def __init__(self, name, size=100, layer=0, number=0):
@@ -143,7 +132,7 @@ def draw_mst_path(nodes, paths, outdir, **kwargs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--seurat-dir', default=None)
+    parser.add_argument('--seurat-dir', default=None, metavar='directory', help='')
     parser.add_argument('-c' ,default=None)
     parser.add_argument('-i', default=None, help='PCA or UMAP file, row index is barcode')
     parser.add_argument('-u', default=None, help='Graph coordinates')
@@ -172,7 +161,7 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     genes = None
 
-    logger = __get_logger(logging.getLogger(sys._getframe().f_code.co_name))
+    logger = et_logger(os.path.basename(__file__))
     if args.verbose: logger.setLevel(logging.DEBUG)
 
     metrics = args.metrics
