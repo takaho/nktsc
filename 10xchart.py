@@ -1081,7 +1081,6 @@ def count_tags_by_cluster(arguments=None):
     return outputs
 
 def generate_cluster_heatmap(arguments=None):
-    print(arguments)
     if arguments is None:
         parser = argparse.ArgumentParser()
         parser.add_argument('--verbose', action='store_true')
@@ -1152,6 +1151,8 @@ def generate_cluster_heatmap(arguments=None):
         samples = {'Sample':barcodes}
 
     expr = load_gene_expression(fn_expr, genes, verbose=verbose, logger=logger)
+    print(expr)
+    exit(0)
     genes = [g for g in genes if g in expr.index]
 
     # marker expression
