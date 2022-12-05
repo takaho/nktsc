@@ -2,7 +2,7 @@
 1. Heatmap of NKT subtype markers.
 2. Swearm plots of Klf2, Zeb2 by clusters
 3. Correlation comparison with Zeb2 or Klrg1
-4. 
+4. Scatter plot of scRNA-seq coodinates
 """
 
 import os, sys, re
@@ -276,7 +276,15 @@ params:
     with open(fn_info, 'w') as fo:
         json.dump(info, fo, indent=2)
 
-def show_correlation():
+def draw_correlation_map():
+    """Draw scatter plot of given genes.
+    parameters
+    -e [filename] : expression tsv file
+    -c [filename] : cluster tsv file
+    -o [filename] : Chart HTML file
+    -g gene1 gene2... : Genes
+    --cluster cls1 cls2 ... : Clusters used for calculation
+    """
     parser = argparse.ArgumentParser()        
     parser.add_argument('-e', default='merged/seurat/seurat.normalized.tsv')
     parser.add_argument('-c', default='merged/seurat/seurat.clusters.tsv')
@@ -387,9 +395,12 @@ def _load_mt_counts(filename):
     return df
 
 
-def show_cell_state():
+def draw_cell_state():
     """
-    MT-ratio vs read count map to identify dead / apoptotic /duplex cells
+    MT-ratio vs read count map to identify dead / apoptotic /duplex cells.
+    -c [filename] : cluster
+    -e [filename] : expression tsv file 
+    --seurat-dir : seurat.R output direcory giving default cluster and expression table
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--seurat-dir', default='merged/seurat')
@@ -454,7 +465,7 @@ def show_cell_state():
     plotly.offline.plot(fig, filename=fn_html.as_posix(), auto_open=auto_open)
     fig.write_image(fn_pdf.as_posix())
 
-def show_umap():
+def draw_umap_scatter():
     """UMAP scatter plot with cluster/study filter
     """
     parser = argparse.ArgumentParser()
@@ -578,6 +589,13 @@ def interpret_colorschema(colors, default_color='D3'):
     return colorschema
 
 def draw_heatmaps(argument=None, logger=None):
+    """Heatmap
+    --seurat-dir : directory to seurat.R output
+    -c : cluster
+    -e : expression
+    --color : color name (plotly name)
+    --zmax : z
+    """
     if argument is None:
         parser = argparse.ArgumentParser()
         parser.add_argument('--seurat-dir', default='merged/seurat', help='single cell counts')
@@ -597,6 +615,7 @@ def draw_heatmaps(argument=None, logger=None):
         parser.add_argument('--color', default='RdBu_r')
         parser.add_argument('--zmax', type=float, default=4)
         parser.add_argument('--singlecell', action='store_true')
+        parser.add_argument('--method', choices=['zscore', 'rawcount'], default='zscore')
 
         parser.add_argument('--cluster', nargs='+', default=['C7', 'C11', 'C1', 'C9', 'C10', 'C2'])
 
@@ -619,6 +638,12 @@ def draw_heatmaps(argument=None, logger=None):
     fn_expr = args.e or (seurat_dir / 'seurat.normalized.tsv').as_posix()
     fn_log = outdir / 'heatmap.log'
     fn_info = outdir / 'heatmap.info'
+    fn_chart = outdir / 'heatmap.html'
+    fn_tsv = outdir / 'heatmap.tsv'
+    fn_raw = outdir / 'heatmap.raw.tsv'
+    fn_sc_tsv = outdir / 'heatmap.sc.tsv'
+    method = args.method
+
     genes = args.g
     selected_clusters = args.cluster
     clusters = args.cluster
@@ -647,6 +672,8 @@ def draw_heatmaps(argument=None, logger=None):
         #     'qvalue':qthr,
         #     'phi':phi_thr,
         # }
+        'zmax':zmax,
+        'expression':fn_expr,
     }
     # Select genes
     # nkt1.genes.tsv
@@ -686,6 +713,7 @@ def draw_heatmaps(argument=None, logger=None):
     else:
         # pass
         pass
+    info['genes'] = genes
     logger.info('loading clusters')
     clu = pd.read_csv(fn_clu, sep='\t', index_col=0)
     cluval = clu.values.reshape(-1)
@@ -741,7 +769,7 @@ def draw_heatmaps(argument=None, logger=None):
         # print(ci, c, clu2idx[c])
         submat = expr.iloc[:,clu2idx[c]]
         a_ = np.array(np.mean(submat, axis=1)).reshape(-1, 1)
-        print(ci, c, a_.shape)
+        # print(ci, c, a_.shape)
         avgmat[:,ci:ci+1] = a_
         scmat[:,len(idx):len(idx) + submat.shape[1]] = submat
         cname = 'C{}'.format(c + 1)
@@ -753,13 +781,14 @@ def draw_heatmaps(argument=None, logger=None):
 
     a = np.mean(avgmat, axis=1).reshape(-1, 1)
     s = np.std(avgmat, axis=1).reshape(-1, 1)
+    s[s<=0.1] = 0.1
+
     diffmat = avgmat - a
     zscore = diffmat / s
     zscore[np.isnan(zscore)] = 0
     df_avg = pd.DataFrame(zscore, index=genes, columns=avgcol)
 
-    print(use_sort)
-    if use_sort and False:
+    if use_sort:
         import sklearn.cluster
         clu = sklearn.cluster.AgglomerativeClustering(n_clusters=n_clusters)
         clu.fit(df_avg)
@@ -774,194 +803,34 @@ def draw_heatmaps(argument=None, logger=None):
         idx = []
         for row in sorted(range(n_genes), key=lambda j:weights[clu.labels_[j]]):
             idx.append(row)
+        # print(idx)
         df_avg = df_avg.iloc[idx,:]
         df_sc = df_sc.iloc[idx,:]
-
-    # a = np.mean(scmat, axis=1).reshape(-1, 1)
-    # s = np.std(scmat, axis=1).reshape(-1, 1)
-    # s[s<=0] = 1
-    # diffmat = scmat - a
-    # zscore = diffmat / s
-    # zscore[np.isnan(zscore)] = 0
-    df_sc = pd.DataFrame(scmat, index=genes, columns=sccol)
-    # print(df_sc)
+        df_geneclus = pd.DataFrame(clu.labels_[idx], index=df_avg.index, columns=['Cluster', ])
+        df_geneclus.to_csv((outdir / 'sorted.genes.tsv').as_posix(), sep='\t')
+        info['gene_cluster'] = dict(zip(df_geneclus.index, [int(x_) for x_ in clu.labels_[idx]]))
+    else:
+        # a = np.mean(scmat, axis=1).reshape(-1, 1)
+        # s = np.std(scmat, axis=1).reshape(-1, 1)
+        # s[s<=0] = 1
+        # diffmat = scmat - a
+        # zscore = diffmat / s
+        # zscore[np.isnan(zscore)] = 0
+        df_sc = pd.DataFrame(scmat, index=genes, columns=sccol)
+        # print(df_sc)
 
     figs = plotly.subplots.make_subplots(cols=2, rows=1, subplot_titles=['cluster average', 'by cell'])
-    figs.add_trace(go.Heatmap(z=df_avg.values, x=avgcol, y=genes, zmin=-zmax, zmax=zmax, colorscale=colorschema), row=1, col=1)
-    figs.add_trace(go.Heatmap(z=df_sc.values, x=sccol, y=genes, zmin=-zmax, zmax=zmax, colorscale=colorschema), row=1, col=2)
+    figs.add_trace(go.Heatmap(z=df_avg.values, x=avgcol, y=df_avg.index, zmin=-zmax, zmax=zmax, colorscale=colorschema), row=1, col=1)
+    figs.add_trace(go.Heatmap(z=df_sc.values, x=sccol, y=df_sc.index, zmin=-zmax, zmax=zmax, colorscale=colorschema), row=1, col=2)
     figs['layout']['yaxis1']['autorange'] = 'reversed'
     figs['layout']['yaxis2']['autorange'] = 'reversed'
-    plotly.offline.plot(figs, filename='test.html')
-
-    exit()
-
-
-
-    data = []
-    with open(fn_data) as fi:
-        items = fi.readline().strip().split('\t')
-        start = 9
-        n_clusters = len(items) - start
-        cnames_ = []#items[9:]
-        colnums = []
-        for i, c in enumerate(items[start:]):
-            c = c.split('_')[0]
-            if c in cnames:
-                colnums.append(i + start)
-                cnames_.append(c)
-        table = []
-        genes = []
-        for line in fi:
-            items = line.strip().split('\t')
-            # g, c, d = line.split('\t', 2)
-            # print(d)
-            g = items[0]
-            if g in common_genes:
-                values = [float(items[_]) for _ in colnums]
-                if np.max(values) <= 0:
-                    logger.warning('skip {} because of 0 counts'.format(g))
-                    continue
-
-                # values = [float(x_) for x_ in d.split('\t')]
-                table.append(values)#values[7:])
-                genes.append(g)
-        df = pd.DataFrame(table, index=genes, columns=cnames_)
-
-    logger.info('calculating Z-score')
-    avg = np.asarray(np.mean(df, axis=1)).reshape(-1, 1)
-    sd = np.asarray(np.std(df, axis=1)).reshape(-1, 1)
-
-    # print(avg.shape)
-    # print(sd.shape)
-    diff = df.values - avg
-
-    # print(diff.shape)
-    # z = diff / sd
-    # print(np.max(1.0, sd))
-    z = diff / sd
-    # print(z.shape)
-    zscore = pd.DataFrame(z, columns=df.columns, index=df.index)
-    #qthr = 0.01
-
-    # genes = []
-    # data = []
-    # dispersion = 0.001
-    # with open('wt/WT/analysis_mt/markereval.tsv') as fi:
-    #     columns = fi.readline().strip().split('\t')
-    #     for line in fi:
-    #         items = line.strip().split('\t')
-    #         gene = items[0]
-    #         clus = items[1]
-    #         expr = float(items[2])
-    #         avg = float(items[3])
-    #         qval1 = float(items[5])
-    #         qval2 = float(items[8])
-    #         if qval1 < qthr or qval2 < qthr and expr > avg * 2.0:
-    #             genes.append(items[0])
-    #             values = np.array([float(x_) for x_ in items[9:]])
-    #             # print(np.log2((values + 0.001)/ (avg + 0.001)))
-    #             data.append(np.log2((values + dispersion)/ (avg + dispersion)))
-    data = zscore
-    # n_clusters = 4
-    ag = sklearn.cluster.AgglomerativeClustering(n_clusters=n_clusters)
-    clu = ag.fit(data)
-    n_genes = data.shape[0]
-    x = data.columns
-    z, y = [], []
-
-    cluster_rank = np.zeros(n_clusters)
-    cluster_args = [[] for i in range(n_clusters)]
-    values = data.values
-    for i in range(data.shape[0]):
-        cluster_args[ag.labels_[i]].append(np.argmax(values[i]))
-        #np.argmax(values[i])].append(
-    # print(cluster_args)
-    # print(scipy.stats.mode(cluster_args))
-    cluster_rank = [scipy.stats.mode(x_).mode[0] for x_ in cluster_args]
-    # print(cluster_rank)
-    # exit()
-    for i in sorted(range(n_genes), key=lambda j:cluster_rank[ag.labels_[j]]):
-        z.append(data.values[i])
-        gene = data.index[i]
-        y.append(gene)
-        
-
-    # matrix = np.zeros((n_genes, n_genes))
-    # for i in range(n_genes):
-    #     di = data[i]
-    #     for j in range(i + 1, n_genes):
-    #         dj = data[j]
-    #         dist = di = dj
-    #         matrix[i,j] = matrix[j,i] = np.dot(dist, dist)
-    # leaves = tkutil.get_ordered_leaves(matrix)
-    # print(matrix.shape)
-    # print(leaves)
-    # exit()
-    # for i in sorted(range(n_genes), key=lambda i:ag.labels_[i]):
-    #     z.append(data[i])
-    #     y.append(genes[i])
-
-
-    fn_bycluster = outdir / 'bycluster.html'
-    hm = go.Heatmap(z=z, x=x, y=y, colorscale=colorschema, zmin=-zmax, zmax=zmax)
-    fig = go.Figure(hm)
-    fig['layout']['yaxis']['autorange'] = 'reversed'
-
-    plotly.offline.plot(fig, filename=fn_bycluster.as_posix())
-    fn_out = outdir / 'bycluster.tsv'
-    fn_pdf = outdir / 'bycluster.pdf'
-    pd.DataFrame(z, columns=x, index=y).to_csv(fn_out.as_posix(), sep='\t', float_format='%.3f')
-
-    # fig.write_image(fn_pdf.as_posix())
-
-    info['heatmap.cluster'] = {
-        'chart':fn_bycluster.as_posix(), 'table':fn_out.as_posix(), 'pdf':fn_pdf.as_posix(),
-        'n_clusters':len(x), 'n_genes':len(y)}
-
-    if scmode or False:
-        logger.info('generating single cell heatmap')
-        sdir = pathlib.Path(args.seurat_dir)
-        df_clu = pd.read_csv((sdir / 'seurat.clusters.tsv').as_posix(), sep='\t', index_col=0)
-        df_clu.index = [re.sub('x?\\-\\d$', '', x_) for x_ in df_clu.index]
-        barcodes = []
-        hmlabels = []
-        for col in data.columns:
-            m = re.match('C(\\d+)', col)
-            if m:
-                cl = int(m.group(1)) - 1
-                bcd = df_clu[df_clu['x']==cl].index
-                barcodes += list(bcd)
-                for i in range(len(bcd)):
-                    items = bcd[i].split(':')
-                    if len(items) > 1:
-                        hmlabels.append('C{}.{}.{}'.format(cl + 1, i + 1, items[0]))
-                    else:
-                        hmlabels.append('C{}.{}'.format(cl + 1, i + 1))
-        fn_cnt = sdir / 'seurat.count.tsv'
-        sorted_genes = y
-        logger.info('load single cell')
-        expr = cellrangerwrapper.load_gene_expression(fn_cnt.as_posix(), genes=data.index, logger=logger)
-        expr.columns = [re.sub('[\\-\\.:]\\d+$', '', x.replace('.', ':')) for x in expr.columns]
-        genes = [g for g in sorted_genes if g in expr.index]
-        expr = expr.loc[genes]
-        zval = np.log2(expr[barcodes].values + 1)
-
-        hm = go.Heatmap(z=zval, x=hmlabels, y=genes, colorscale='reds', zmin=0, zmax=3)
-        fig = go.Figure(hm)
-        fig['layout']['yaxis']['autorange'] = 'reversed'
-        fn_sc = outdir / 'bycell.html'
-        plotly.offline.plot(fig, filename=fn_sc.as_posix())
-        fn_out = outdir / 'bycell.tsv'
-        fn_pdf = outdir / 'bycell.pdf'
-        pd.DataFrame(expr[barcodes].values, columns=hmlabels, index=genes).to_csv(fn_out.as_posix(), sep='\t', float_format='%.0f')
-        fig.write_image(fn_pdf.as_posix())
-
-        info['heatmap.cell'] = {'chart':fn_sc.as_posix(), 'table':fn_out.as_posix(),'pdf':fn_pdf.as_posix(),
-            'n_clusters':expr.shape[1], 'n_genes':len(genes)}
-
-        # epxr.columns = [re.sub('^\\w+:', '', ) for x in expr.index
+    plotly.offline.plot(figs, filename=fn_chart.as_posix())
+    df_avg.to_csv(fn_tsv.as_posix(), sep='\t', float_format='%.3f')
+    df_sc.to_csv(fn_sc_tsv.as_posix(), sep='\t', float_format='%.3f')
+    # df_raw.to_csv(fn_raw.as_posix(), sep='\t', float_format='%.3f')
     with open(fn_info, 'w') as fo:
         json.dump(info, fo, indent=2)
+
 
 
 if __name__ == '__main__':
@@ -972,11 +841,11 @@ if __name__ == '__main__':
     elif cmd[0] == 'heatmap':
         draw_heatmaps()
     elif cmd[0] == 'correlation':
-        show_correlation()
+        draw_correlation()
     elif cmd[0] == 'cellstate':
-        show_cell_state()
+        draw_cell_state()
     elif cmd[0] == 'umap':
-        show_umap()
+        draw_umap_scatter()
     else:
         raise Exception('unknown command' + cmd[0])
 
