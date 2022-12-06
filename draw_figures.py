@@ -18,6 +18,12 @@ import argparse
 import pandas as pd
 import numpy as np
 
+import scipy.stats
+import matplotlib.backends.backend_pdf
+import matplotlib.pyplot as plt
+import matplotlib
+import seaborn as sns
+
 sys.path.append('/mnt/nas/genomeplatform/scripts')
 
 import tkutil
@@ -149,13 +155,7 @@ params:
     plotly.offline.plot(f, filename=fn_chart.as_posix(), auto_open=auto_open)
 
 
-    import scipy.stats
-    import tkgraph
-    import matplotlib.backends.backend_pdf
-    import matplotlib.pyplot as plt
-    import matplotlib
-    import seaborn as sns
-
+    
     colors = 'navy', 'limegreen', 'gold', 'orange', 'brown', 'cyan'
     colors = ['navy', ]#'cadetblue', 'navy', ]
     linecolors = ['orange', ]

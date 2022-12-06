@@ -33,3 +33,6 @@ Since each cell has viriable counts of total mRNAs and mitochondrial RNAs and we
 
     python draw_figures.py cellstate --seurat-dir [seurat.R output directory] -o [output directory] [--verbose]
 
+# Trajectory analysis
+
+    python mstpath.py --seurat-dir [seurat.R output directory] -i [anova_cluster.py output file] --organism ]mm10/hg38] 
